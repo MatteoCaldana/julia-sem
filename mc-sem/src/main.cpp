@@ -34,11 +34,12 @@ int main() {
       mat.set(i, j, 0.);
       for(int k = 0; k < deg + 1; ++k) {
         const auto xk = sem::lgl[deg][k];
-        mat.add(i, j, 
+        const auto aij = 
             sem::basis_fun_prime<deg>(i, xk) 
           * sem::basis_fun_prime<deg>(j, xk) 
           * alphas[k]
-        ); 
+        mat.add(i, j, aij); 
+        std::cout << aij << std::endl;
         if(j == 0) {
           rhs[i] = M_PI * M_PI * std::cos(M_PI*xk) * sem::basis_fun<deg>(i, xk) * alphas[k];
         }
@@ -51,7 +52,6 @@ int main() {
   solver.solve(mat, sol, rhs, PreconditionIdentity());
 
   std::cout << rhs << std::endl;
-  std::cout << mat << std::endl;
   std::cout << sol << std::endl;
 
 
