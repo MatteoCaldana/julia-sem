@@ -50,6 +50,8 @@ int main() {
   SolverCG<Vector<double>> solver(solver_control);
   solver.solve(mat, sol, rhs, PreconditionIdentity());
 
+  std::cout << rhs << std::endl;
+  std::cout << mat << std::endl;
   std::cout << sol << std::endl;
 
 
