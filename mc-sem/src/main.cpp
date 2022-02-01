@@ -23,8 +23,8 @@ int main() {
   constexpr int deg = 2;
   const auto alphas = sem::compute_alpha<deg>();
 
-  Vector<double> x, f;
-  FullMatrix<double> A
+  Vector<double> sol, rhs;
+  FullMatrix<double> mat;
 
   for(int i = 0; i < deg; ++i) {
     for(int j = 0; j < deg; ++j) {
@@ -40,9 +40,9 @@ int main() {
     }
   }
 
-  SolverControl            solver_control(1000, 1e-6 * system_rhs.l2_norm());
+  SolverControl            solver_control(1000, 1e-6 * rhs.l2_norm());
   SolverCG<Vector<double>> solver(solver_control);
-  solver.solve(A, x, f, PreconditionIdentity());
+  solver.solve(mat, sol, rhs, dealii::PreconditionIdentity());
 
 
   return 0;
