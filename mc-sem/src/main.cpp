@@ -26,7 +26,7 @@ int main() {
   constexpr int deg = 8;
   const auto alphas = sem::compute_alpha<deg>();
 
-  Vector<double> sol, rhs;
+  Vector<double> sol, rhs;  
   FullMatrix<double> mat;
 
   for(int i = 0; i < deg; ++i) {
@@ -34,13 +34,13 @@ int main() {
       mat.set(i, j, 0.);
       for(int k = 0; k < deg; ++k) {
         const auto xk = sem::lgl[deg][k];
-        A.add(i, j, 
+        mat.add(i, j, 
             sem::basis_fun_prime<deg>(i, xk) 
           * sem::basis_fun_prime<deg>(j, xk) 
-          * alpha[k]
+          * alphas[k]
         ); 
         if(j == 0) {
-          rhs[i] = M_PI * M_PI * std::cos(M_PI*xk) * sem::basis_fun<deg>(i, xk);
+          rhs[i] = M_PI * M_PI * std::cos(M_PI*xk) * sem::basis_fun<deg>(i, xk) * alphas[k];
         }
       }
     }
