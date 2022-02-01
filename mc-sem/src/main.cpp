@@ -10,6 +10,7 @@
 #include <deal.II/lac/precondition.h>
 
 #include <iostream>
+#include <cmath>
 
 using namespace dealii;
 
@@ -22,7 +23,7 @@ int main() {
     std::cout << err << std::endl;
   }
 
-  constexpr int deg = 2;
+  constexpr int deg = 8;
   const auto alphas = sem::compute_alpha<deg>();
 
   Vector<double> sol, rhs;
@@ -30,13 +31,16 @@ int main() {
 
   for(int i = 0; i < deg; ++i) {
     for(int j = 0; j < deg; ++j) {
-      //A[i][j] = 0.;
+      mat.set(i, j, 0.);
       for(int k = 0; k < deg; ++k) {
         const auto xk = sem::lgl[deg][k];
-        //A[i][j] += diff(xk) * sem::basis_fun_prime<deg>(i, xk) * sem::basis_fun_prime<deg>(j, xk) * alpha[k]
-        //         + reac(xk) * sem::basis_fun<deg>(i, xk) * sem::basis_fun<deg>(j, xk) * alpha[k];
+        A.add(i, j, 
+            sem::basis_fun_prime<deg>(i, xk) 
+          * sem::basis_fun_prime<deg>(j, xk) 
+          * alpha[k]
+        ); 
         if(j == 0) {
-          //f[i] = forc(xk) * sem::basis_fun<deg>(i, xk);
+          rhs[i] = M_PI * M_PI * std::cos(M_PI*xk) * sem::basis_fun<deg>(i, xk);
         }
       }
     }
