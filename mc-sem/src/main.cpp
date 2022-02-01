@@ -11,6 +11,8 @@
 
 #include <iostream>
 
+using namespace dealii;
+
 int main() {
   for(int deg = 2; deg < 20; deg++) {
     double err = 0;
@@ -42,7 +44,7 @@ int main() {
 
   SolverControl            solver_control(1000, 1e-6 * rhs.l2_norm());
   SolverCG<Vector<double>> solver(solver_control);
-  solver.solve(mat, sol, rhs, dealii::PreconditionIdentity());
+  solver.solve(mat, sol, rhs, PreconditionIdentity());
 
 
   return 0;
