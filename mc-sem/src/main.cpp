@@ -26,13 +26,13 @@ int main() {
   constexpr int deg = 8;
   const auto alphas = sem::compute_alpha<deg>();
 
-  Vector<double> sol, rhs;  
-  FullMatrix<double> mat;
+  Vector<double> sol(deg + 1), rhs(deg + 1);  
+  FullMatrix<double> mat(deg + 1, deg + 1);
 
-  for(int i = 0; i < deg; ++i) {
-    for(int j = 0; j < deg; ++j) {
+  for(int i = 0; i < deg + 1; ++i) {
+    for(int j = 0; j < deg + 1; ++j) {
       mat.set(i, j, 0.);
-      for(int k = 0; k < deg; ++k) {
+      for(int k = 0; k < deg + 1; ++k) {
         const auto xk = sem::lgl[deg][k];
         mat.add(i, j, 
             sem::basis_fun_prime<deg>(i, xk) 
