@@ -48,12 +48,13 @@ def test(n, xx):
   norm = np.abs(sym_evald).max()
   return np.abs(evald).max(), norm.p / norm.q
 
-for i in range(3, 20):
-  n1 = lglnodes(i)[1:-1]
-  n2 = sym_lglnodes(i)
-  print(max(abs(n1 - n2)))
-  print('newt', test(i, n1))
-  print('sym ', test(i, n2))
-  print('/////')
-  # array = ', '.join([f'{float(x):.17e}' for x in n2])
-  # print(f'{{1., {array}, -1.}},')
+if __name__ == "__main__":
+  for i in range(3, 20):
+    n1 = lglnodes(i)[1:-1]
+    n2 = sym_lglnodes(i)
+    print(max(abs(n1 - n2)))
+    print('newt', test(i, n1))
+    print('sym ', test(i, n2))
+    print('/////')
+    # array = ', '.join([f'{float(x):.17e}' for x in n2])
+    # print(f'{{1., {array}, -1.}},')
