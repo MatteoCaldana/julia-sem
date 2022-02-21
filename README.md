@@ -14,4 +14,4 @@ cmake -DCMAKE_BUILD_TYPE="Release" ..
 cmake --build . --config Release
 
 ## myfex
-cmake .. -DPYTHON_EXECUTABLE=/u/sw/toolchains/gcc-glibc/11.2.0/base/bin/python -DCMAKE_BUILD_TYPE=Release
+cmake .. -DPYTHON_EXECUTABLE=$(which python) -DCMAKE_BUILD_TYPE=Release
