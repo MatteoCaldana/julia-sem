@@ -14,7 +14,7 @@ struct CartesianMesh <: Mesh
   nprodv::Vector{Int64}
   corner_a::Vector{Float64}
   corner_b::Vector{Float64}
-  dh::Vector{Float64}
+  jd::Vector{Float64}
 
   function CartesianMesh(a::Vector{Float64}, b::Vector{Float64}, ns::Vector{Int64})
     @assert length(a) == length(b)
@@ -29,7 +29,7 @@ struct CartesianMesh <: Mesh
       nvert *= ns[i] + 1
     end
     h = (b - a) ./ ns
-    return new(nprod[end], nprodv[end], dim, ns, nprod, nprodv, a, b, h)
+    return new(nprod[end], nprodv[end], dim, ns, nprod, nprodv, a, b, h ./ 2)
   end
 end
 
@@ -181,7 +181,7 @@ end
 
 function element_transform(mesh::CartesianMesh, id::Int64, pt::Vector{Float64})::Vector{Float64}
   el_idx = tuple_idx(mesh.nprod, id)
-  return mesh.dh .* ( pt ./ 2 + el_idx .+ 0.5) + mesh.corner_a
+  return mesh.jd .* ( pt + 2 * el_idx .+ 1.0) + mesh.corner_a
 end
 
 function distribute_dof(grid::Mesh, deg::Int64)::Tuple{Matrix{Int64},Matrix{Float64}}

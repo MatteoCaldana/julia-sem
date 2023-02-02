@@ -23,9 +23,9 @@ struct FESpace
 end
 
 function assemble(fe::FESpace, mesh::Mesh, dof_map)
-  Aloc = Float64.(stiff_3d_sp(fe.w_128, fe.d_128, mesh.dh[1] / 2, mesh.dh[2] / 2, mesh.dh[3] / 2))
+  Aloc = Float64.(stiff_3d_sp(fe.w_128, fe.d_128, mesh.jd[1], mesh.jd[2], mesh.jd[3]))
   Mloc = Float64.(reshape(map(prod, Base.product(ntuple(x -> fe.w_128, mesh.dim)...)), length(fe.w)^mesh.dim))
-  Mloc *= mesh.dh[1] * mesh.dh[2] * mesh.dh[3] / 8
+  Mloc *= mesh.jd[1] * mesh.jd[2] * mesh.jd[3]
   ndof = dof_map[end, end]
   A = zeros(Float64, ndof, ndof)
   M = zeros(Float64, ndof)
@@ -51,7 +51,13 @@ function cg(Avmult, b, x, tol)
   r = b - Avmult(x)
   p = r
   rsold = r' * r
-  for i = 1:length(b)
+  if sqrt(rsold) < tol
+    println("No iterations needed")
+    return 0, x
+  end
+
+  i = 1
+  while i <= length(b)
     Ap = Avmult(p)
     alpha = rsold / (p' * Ap)
     x += alpha * p
@@ -63,12 +69,14 @@ function cg(Avmult, b, x, tol)
     end
     p = r + (rsnew / rsold) * p
     rsold = rsnew
+    i += 1
   end
-  println("Residual:", rsold)
-  return x
+  println("Residual:   ", rsold)
+  println("Iterations: ", i)
+  return i, x
 end
 
-function compute_err(u, un, dun, fe, mesh, dof_map)
+function compute_errors(u, un, dun, fe, mesh, dof_map)
   dim = Int64(round(log(size(dof_map, 2)) / log(length(fe.w)), RoundNearest))
   ww = map(prod, Base.product(ntuple(x -> fe.w, dim)...))
   ww = reshape(ww, length(ww))
@@ -76,25 +84,24 @@ function compute_err(u, un, dun, fe, mesh, dof_map)
   h1_err = 0
   for i = 1:size(dof_map, 1)
     li = dof_map[i, :]
-    # there should be a jacobian of the element here, 
-    # so this is the norm up to a constant (if all elements have the same jacobian)
-    l2_err += sum((u[li] - un[li]) .^ 2 .* ww)
+    j = mesh.jd[1] * mesh.jd[2] * mesh.jd[3]
+    l2_err += j * sum((u[li] - un[li]) .^ 2 .* ww)
 
-    u_loc = reshape(u[li], ntuple(x -> length(fe.w), dim))
+    u_loc = reshape(un[li], ntuple(x -> length(fe.w), dim))
     ux = Array{Float64}(undef, size(u_loc))
     uy = Array{Float64}(undef, size(u_loc))
     uz = Array{Float64}(undef, size(u_loc))
     for i = 1:length(fe.w)
       for j = 1:length(fe.w)
-        ux[:, i, j] = fe.d * u_loc[:, i, j] / mesh.dh[1] / 2
-        uy[i, :, j] = fe.d * u_loc[i, :, j] / mesh.dh[2] / 2
-        uz[i, j, :] = fe.d * u_loc[i, j, :] / mesh.dh[3] / 2
+        ux[:, i, j] = fe.d * u_loc[:, i, j] / mesh.jd[1]
+        uy[i, :, j] = fe.d * u_loc[i, :, j] / mesh.jd[2]
+        uz[i, j, :] = fe.d * u_loc[i, j, :] / mesh.jd[3]
       end
     end
     ux = reshape(ux, length(ux))
     uy = reshape(uy, length(uy))
     uz = reshape(uz, length(uz))
-    h1_err += sum(((ux - dun[li, 1]) .^ 2 + (uy - dun[li, 2]) .^ 2 + (uz - dun[li, 3]) .^ 2) .* ww)
+    h1_err += j * sum(((ux - dun[1][li]) .^ 2 + (uy - dun[2][li]) .^ 2 + (uz - dun[3][li]) .^ 2) .* ww)  
   end
   return sqrt(l2_err), sqrt(h1_err)
 end
@@ -113,6 +120,15 @@ end
 
 function sol(xyz)
   return sin.(2 * π * xyz[1, :]) .* cos.(2 * π * xyz[2, :]) .* sin.(2 * π * xyz[3, :])
+end
+
+function dsol(xyz)
+  pi2 = 2 * π
+  sinxyz = sin.(2 * π * xyz)
+  cosxyz = cos.(2 * π * xyz)
+  return pi2*cosxyz[1, :].*cosxyz[2, :].*sinxyz[3, :], 
+        -pi2*sinxyz[1, :].*sinxyz[2, :].*sinxyz[3, :], 
+         pi2*sinxyz[1, :].*cosxyz[2, :].*cosxyz[3, :]
 end
 
 # for deg = 1:4
@@ -152,8 +168,12 @@ function loo(x, y)
   return maximum(abs.(x - y))  
 end
 
-for deg = 1:4
-  for nel = 1:4
+
+# TODO: test compute error
+# TODO: convergence test
+
+for deg = 4:4
+  for nel = [1, 2, 4]
     println("Degree: ", deg)
     println("#Elements: ", nel)
     vars = matread("test-data/3d_stiff_deg"*repr(deg)*"_nel"*repr(nel)*"_v2.mat")
@@ -183,9 +203,19 @@ for deg = 1:4
 
     println("Res:",  norm(A*u - f) / norm(f))
     println("Err:",  norm(u - u_ex) / norm(u_ex), " (normalized)")
+    println("Err against MATLAB: ", norm(u - vars["un"]))
+
+    it, u_cg = cg(x->A*x, f, x0, 1e-14)
+    println("Res:",  norm(A*u_cg - f) / norm(f))
+    println("Err:",  norm(u_cg - u_ex) / norm(u_ex), " (normalized)")
 
     println("Err       :",  norm(u - u_ex))
-    println("Err MATLAB:",  norm(vars["un"] - vars["u_ex"]))
+    println("Err of MATLAB:",  norm(vars["un"] - vars["u_ex"]))
+
+    du_ex = dsol(dof_support)
+    err_l2, err_h1 = compute_errors(u, u_ex, du_ex, fespace, mesh, dof_map)
+    println(err_l2, " ", err_h1)
+
     println("------------------------------------------------")
   end
 end
