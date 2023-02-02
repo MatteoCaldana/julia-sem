@@ -25,6 +25,7 @@ end
 function assemble(fe::FESpace, mesh::Mesh, dof_map)
   Aloc = Float64.(stiff_3d_sp(fe.w_128, fe.d_128, mesh.dh[1] / 2, mesh.dh[2] / 2, mesh.dh[3] / 2))
   Mloc = Float64.(reshape(map(prod, Base.product(ntuple(x -> fe.w_128, mesh.dim)...)), length(fe.w)^mesh.dim))
+  Mloc *= mesh.dh[1] * mesh.dh[2] * mesh.dh[3] / 8
   ndof = dof_map[end, end]
   A = zeros(Float64, ndof, ndof)
   M = zeros(Float64, ndof)
@@ -151,38 +152,43 @@ function loo(x, y)
   return maximum(abs.(x - y))  
 end
 
-deg = 3
-nel = 1
+for deg = 1:4
+  for nel = 1:4
+    println("Degree: ", deg)
+    println("#Elements: ", nel)
+    vars = matread("test-data/3d_stiff_deg"*repr(deg)*"_nel"*repr(nel)*"_v2.mat")
 
-vars = matread("test-data/3d_stiff_deg"*repr(deg)*"_nel"*repr(nel)*".mat")
+    fespace = FESpace(deg)
+    mesh = CartesianMesh([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0], nel * [1, 1, 1])
+    dof_map, dof_support = distribute_dof(mesh, deg) 
 
-fespace = FESpace(deg)
-mesh = CartesianMesh([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0], nel * [1, 1, 1])
-dof_map, dof_support = distribute_dof(mesh, deg)
+    println(loo(dof_support', vars["xyz"]))
+    println(loo(dof_map', vars["nov"]))
 
-println(loo(dof_support', vars["xyz"]))
-println(loo(dof_map', vars["nov"]))
+    A, M = assemble(fespace, mesh, dof_map)
+    f = force(dof_support) .* M
 
-A, M = assemble(fespace, mesh, dof_map)
-println(loo(A, vars["A_org"]))
+    println("Test A: ", loo(A, vars["A_org"]))
+    println("Test f: ", loo(f, vars["f_org"]))
 
-f = force(dof_support) .* M
-println(loo(f, vars["f_org"]))
+    bc = find_bc(mesh, dof_support)
+    x0 = zeros(Float64, size(f))
+    apply_dirichlet_bc(A, x0, f, bc, sol, dof_support)
+    println("Test w bc A: ", loo(A, vars["A"]))
+    println("Test w bc f: ", loo(f, vars["f"]))
 
-bc = find_bc(mesh, dof_support)
-println(loo(bc, vars["ldir"]))
+    u = A \ f
+    println("Test u: ", loo(u, vars["un"]))
+    u_ex = sol(dof_support)
 
-x0 = zeros(Float64, size(f))
-apply_dirichlet_bc(A, x0, f, bc, sol, dof_support)
-println(loo(A, vars["A"]))
-println(loo(f, vars["f"]))
+    println("Res:",  norm(A*u - f) / norm(f))
+    println("Err:",  norm(u - u_ex) / norm(u_ex), " (normalized)")
 
-u = A \ f
-println(loo(u, vars["un"]))
-
-u_ex = sol(dof_support)
-println("Res:",  norm(A*u - f) / norm(f))
-println("Err:",  norm(u - u_ex) / norm(u_ex))
+    println("Err       :",  norm(u - u_ex))
+    println("Err MATLAB:",  norm(vars["un"] - vars["u_ex"]))
+    println("------------------------------------------------")
+  end
+end
 
 # b = @benchmark cg(x->A*x, f, x0, 1e-10)
 # print_benckmark(b)

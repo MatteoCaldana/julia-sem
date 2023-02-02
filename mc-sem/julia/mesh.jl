@@ -57,6 +57,13 @@ end
 #  ...  
 # and the id of the component in the local enumeration 
 # return the global id of the component for the mesh
+#       y
+#       |
+#       |
+#       ---------x
+#      /
+#     /
+#    z
 function get_component_id(mesh::CartesianMesh, eid::Int64, type::Int64, id::Int64)
   id1 = id - 1
   if type == 4 #"element"
@@ -64,28 +71,37 @@ function get_component_id(mesh::CartesianMesh, eid::Int64, type::Int64, id::Int6
   else
     idx = tuple_idx(mesh.nprod, eid)
     if type == 3 # "face"
+      # face with id is:
+      # 1: xy far
+      # 2: xz bottom
+      # 3: yz left
+      # 4: yz right
+      # 5: xz top
+      # 6: xy near
       @assert id <= 6
       if id > 3
         idx[id-3] += 1
-        id1 -= 3
+        id1 = 5 - id1
       end
       eid = flat_idx(mesh.nprodv, idx)
       return 3 * eid + id1
     elseif type == 2 # "edge"
       @assert id <= 12
+      # first three indexes indicates the cartesian move of the element 
+      # the fourth indicates the new id
       TABLE = [
-        [0, 0, 0, 0];;
-        [0, 0, 0, 1];;
-        [1, 0, 0, 1];;
-        [0, 1, 0, 0];;
-        [0, 0, 0, 2];;
-        [1, 0, 0, 2];;
-        [0, 1, 0, 2];;
-        [1, 1, 0, 2];;
-        [0, 0, 1, 0];;
-        [0, 0, 1, 1];;
-        [1, 0, 1, 1];;
-        [0, 1, 1, 0]
+        [0, 0, 0, 0];; # x bottom far
+        [0, 0, 0, 1];; # y left far 
+        [1, 0, 0, 1];; # y right far
+        [0, 1, 0, 0];; # x top far
+        [0, 0, 0, 2];; # z left bottomp
+        [1, 0, 0, 2];; # z right bottom
+        [0, 1, 0, 2];; # z left top
+        [1, 1, 0, 2];; # z right top
+        [0, 0, 1, 0];; # x bottom near
+        [0, 0, 1, 1];; # y left near
+        [1, 0, 1, 1];; # y right near
+        [0, 1, 1, 0]   # x top near
       ]
       idx += TABLE[1:3, id]
       eid = flat_idx(mesh.nprodv, idx)
@@ -216,8 +232,7 @@ function find_bc(mesh::CartesianMesh, pts)
   return findall(x -> x > 0, vec(is_bc))
 end
 
-#get_reference_dof(3, 3)
-# mesh = CartesianMesh([-1., -1., -1.], [1., 1., 1.], [1, 1, 2])
-# dof_map, dof_support = distribute_dof(mesh, 3)
-# println(dof_map)
+# mesh = CartesianMesh([-1., -1., -1.], [1., 1., 1.], [2, 2, 2])
+# dof_map, dof_support = distribute_dof(mesh, 2)
+# display(dof_map')
 # println(size(dof_support), dof_support)
