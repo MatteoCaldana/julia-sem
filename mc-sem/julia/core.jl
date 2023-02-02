@@ -1,6 +1,7 @@
 using DoubleFloats  # Double64
 using Quadmath      # Float128
 using BenchmarkTools
+using SparseArrays
 
 function pnleg(x::Array{Float128,1}, n::Int64)::Array{Float128,1}
   if n == 0
@@ -278,7 +279,6 @@ function stiff_3d_sp(w, d, jx, jy, jz)
 end
 
 
-
 function print_benckmark(b)
   io = IOBuffer()
   show(io, "text/plain", b)
@@ -310,23 +310,70 @@ end
 # small = Float128(1e-33)
 # println(small, Float64(small))
 
-n = 3
-np = n + 1 
-println("========================================================")
-println("n: ", n)
-println("--------------------------------------------------------")
-x, w = xwlgl(np)
-d = derlgl(x)
+function bench()
+  n = 8
+  np = n + 1
+  println("========================================================")
+  println("n: ", n)
+  println("--------------------------------------------------------")
+  println("Dense MM")
+  x, w = xwlgl(np)
+  d = derlgl(x)
 
-A = Float64.(stiff_3d_sp(w, d, 1.0, 1.0, 1.0))
-u = rand(size(A, 1))
+  A = Float64.(stiff_3d_sp(w, d, 1.0, 1.0, 1.0))
+  u = rand(size(A, 1))
 
-b = @benchmark v = A * u
-print_benckmark(b)
+  b = @benchmark v = A * u
+  print_benckmark(b)
+  println("--------------------------------------------------------")
+  println("Kron trick")
 
-d64 = Float64.(derlgl(x))
-b = @benchmark v = d64 * reshape(u, np, np*np)
-print_benckmark(b)
-println("========================================================")
+  d64 = Float64.(derlgl(x))
+  b = @benchmark v = d64 * reshape(u, np, np * np)
+  print_benckmark(b)
+
+  println("--------------------------------------------------------")
+  println("Sparse CSC")
+  Asp = sparse(A)
+  println(nnz(Asp), " ", nnz(Asp) / length(A), " ", sum(abs.(A) .> 0.0), " ", sum(abs.(A) .> 1e-12))
+  b = @benchmark v = Asp * u
+  print_benckmark(b)
+
+  println("--------------------------------------------------------")
+  println("Sparse CSC transpose")
+  b = @benchmark v = transpose(Asp) * u
+  print_benckmark(b)
+
+  println("--------------------------------------------------------")
+  println("Sparse CSR")
+  a = zeros(Float64, 0)
+  c = zeros(Int64, 0)
+  r = ones(Int64, size(A, 1) + 1)
+  for i = 1:size(A, 1)
+    for j = 1:size(A, 2)
+      if abs(A[i, j]) > 2 * eps(Float64)
+        push!(a, A[i, j])
+        push!(c, j)
+      end
+    end
+    r[i+1] = length(a)
+  end
+
+  function mul(v::Vector{Float64}, c::Vector{Int64}, r::Vector{Int64}, u::Vector{Float64})::Vector{Float64}
+    y = zeros(Float64, size(u))
+    for row = 1:length(u)
+      @inbounds for j = r[row]:r[row+1]
+        @inbounds y[row] += v[j] * u[c[j]]
+      end
+    end
+    return y
+  end
+
+  b = @benchmark v = mul(a, c, r, u)
+  print_benckmark(b)
+
+  println("========================================================")
+end
+
 
 
