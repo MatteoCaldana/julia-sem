@@ -22,18 +22,11 @@ struct FESpace
   end
 end
 
-function assemble(fe::FESpace, mesh::Mesh, dof_map)
+function assemble_local(fe::FESpace, mesh::Mesh)
   Aloc = Float64.(stiff_3d_sp(fe.w_128, fe.d_128, mesh.jd[1], mesh.jd[2], mesh.jd[3]))
   Mloc = Float64.(reshape(map(prod, Base.product(ntuple(x -> fe.w_128, mesh.dim)...)), length(fe.w)^mesh.dim))
   Mloc *= mesh.jd[1] * mesh.jd[2] * mesh.jd[3]
-  ndof = dof_map[end, end]
-  A = zeros(Float64, ndof, ndof)
-  M = zeros(Float64, ndof)
-  for i = 1:size(dof_map, 1)
-    A[dof_map[i, :], dof_map[i, :]] += Aloc
-    M[dof_map[i, :]] += Mloc
-  end
-  return A, M
+  return Aloc, Mloc
 end
 
 function apply_dirichlet_bc(A, x, b, bc, sol, dof_support)
@@ -131,94 +124,107 @@ function dsol(xyz)
          pi2*sinxyz[1, :].*cosxyz[2, :].*cosxyz[3, :]
 end
 
-# for deg = 1:4
-#   for nel = [1, 2, 4, 8, 16, 32, 64]
-#     println("Basis deg: ", deg)
-#     println("#elements: ", nel)
-#     println("Building FE space")
-#     fespace = FESpace(deg)
-#     println("Building mesh")
-#     mesh = CartesianMesh([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0], nel*[1, 1, 1])
-#     println("Distributing dof")
-#     dof_map, dof_support = distribute_dof(mesh, deg)
-#     println("Problem has ", dof_map[end, end], " dofs")
-#     println("Assembling system")
-#     A = assemble(fespace, mesh, dof_map)
-#     f = force(dof_support)
-#     println("Applying BC")
-#     x0 = zeros(Float64, size(f))
-#     bc = find_bc(mesh, dof_support)
-#     apply_dirichlet_bc(A, x0, f, bc, sol, dof_support)
-#     println("Solving system")
-#     u = A \ f
-
-#     println("Compunting error")
-#     u_ex = sol(dof_support)
-#     du_ex = zeros(Float64, size(u_ex, 1), 3)
-#     println("Res:",  norm(A*u - f) / norm(f))
-#     println("Err:",  norm(u - u_ex))
-#     err_l2, err_h1 = compute_err(u, u_ex, du_ex, fespace, mesh, dof_map)
-#     println("Err L2:", err_l2)
-#     println("Err H1:", err_h1)
-#     println("-------------------------------------")
-#   end
-# end
-
-function loo(x, y)
-  return maximum(abs.(x - y))  
+function vmult(Aloc, x, dof_map, bc)
+  y = zeros(Float64, size(x))
+  for i = 1:size(dof_map, 1)
+    y[dof_map[i, :]] += Aloc * x[dof_map[i, :]]
+  end
+  y[bc] = x[bc]
+  return y
 end
 
-
-# TODO: test compute error
-# TODO: convergence test
-
-for deg = 4:4
-  for nel = [1, 2, 4]
-    println("Degree: ", deg)
-    println("#Elements: ", nel)
-    vars = matread("test-data/3d_stiff_deg"*repr(deg)*"_nel"*repr(nel)*"_v2.mat")
-
+for deg = 1:2
+  for nel = [4, 8]
+    println("Basis deg: ", deg)
+    println("#elements: ", nel)
+    println("Building FE space")
     fespace = FESpace(deg)
-    mesh = CartesianMesh([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0], nel * [1, 1, 1])
-    dof_map, dof_support = distribute_dof(mesh, deg) 
-
-    println(loo(dof_support', vars["xyz"]))
-    println(loo(dof_map', vars["nov"]))
-
-    A, M = assemble(fespace, mesh, dof_map)
+    println("Building mesh")
+    mesh = CartesianMesh([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0], nel*[1, 1, 1])
+    println("Distributing dof")
+    dof_map, dof_support = distribute_dof(mesh, deg)
+    ndof = dof_map[end, end]
+    println("Problem has ", ndof, " dofs")
+    println("Assembling system")
+    Aloc, Mloc = assemble_local(fespace, mesh)
+    A = zeros(Float64, ndof, ndof)
+    M = zeros(Float64, ndof)
+    for i = 1:size(dof_map, 1)
+      A[dof_map[i, :], dof_map[i, :]] += Aloc
+      M[dof_map[i, :]] += Mloc
+    end
     f = force(dof_support) .* M
-
-    println("Test A: ", loo(A, vars["A_org"]))
-    println("Test f: ", loo(f, vars["f_org"]))
-
-    bc = find_bc(mesh, dof_support)
+    println("Applying BC")
     x0 = zeros(Float64, size(f))
+    bc = find_bc(mesh, dof_support)
     apply_dirichlet_bc(A, x0, f, bc, sol, dof_support)
-    println("Test w bc A: ", loo(A, vars["A"]))
-    println("Test w bc f: ", loo(f, vars["f"]))
 
+    println("Solving system")
     u = A \ f
-    println("Test u: ", loo(u, vars["un"]))
+    println("Compunting error")
     u_ex = sol(dof_support)
-
-    println("Res:",  norm(A*u - f) / norm(f))
-    println("Err:",  norm(u - u_ex) / norm(u_ex), " (normalized)")
-    println("Err against MATLAB: ", norm(u - vars["un"]))
-
-    it, u_cg = cg(x->A*x, f, x0, 1e-14)
-    println("Res:",  norm(A*u_cg - f) / norm(f))
-    println("Err:",  norm(u_cg - u_ex) / norm(u_ex), " (normalized)")
-
-    println("Err       :",  norm(u - u_ex))
-    println("Err of MATLAB:",  norm(vars["un"] - vars["u_ex"]))
-
+    du_ex = zeros(Float64, size(u_ex, 1), 3)
+    println("Res: ",  norm(A*u - f) / norm(f))
+    println("Err: ",  norm(u - u_ex))
     du_ex = dsol(dof_support)
     err_l2, err_h1 = compute_errors(u, u_ex, du_ex, fespace, mesh, dof_map)
-    println(err_l2, " ", err_h1)
+    println("Err L2: ", err_l2)
+    println("Err H1: ", err_h1)
 
-    println("------------------------------------------------")
+    println("Solving system with CG")
+    it, u = cg(x->vmult(Aloc, x, dof_map, bc), f, x0, 1e-14)
+    println("Compunting error")
+    println("Res: ",  norm(A*u - f) / norm(f))
+    println("Err: ",  norm(u - u_ex))
+    du_ex = dsol(dof_support)
+    err_l2, err_h1 = compute_errors(u, u_ex, du_ex, fespace, mesh, dof_map)
+    println("Err L2: ", err_l2)
+    println("Err H1: ", err_h1)
+    println("-------------------------------------")
   end
 end
 
-# b = @benchmark cg(x->A*x, f, x0, 1e-10)
-# print_benckmark(b)
+# function loo(x, y)
+#   return maximum(abs.(x - y))  
+# end
+
+
+# # TODO: test compute error
+# # TODO: convergence test
+
+# for deg = 4:4
+#   for nel = [1, 2, 4]
+#     println("Degree: ", deg)
+#     println("#Elements: ", nel)
+
+#     fespace = FESpace(deg)
+#     mesh = CartesianMesh([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0], nel * [1, 1, 1])
+#     dof_map, dof_support = distribute_dof(mesh, deg) 
+
+#     A, M = assemble(fespace, mesh, dof_map)
+#     f = force(dof_support) .* M
+
+#     bc = find_bc(mesh, dof_support)
+#     x0 = zeros(Float64, size(f))
+#     apply_dirichlet_bc(A, x0, f, bc, sol, dof_support)
+
+#     u = A \ f
+#     u_ex = sol(dof_support)
+
+#     println("Res: ",  norm(A*u - f) / norm(f))
+#     println("Err: ",  norm(u - u_ex))
+
+#     it, u_cg = cg(x->A*x, f, x0, 1e-14)
+#     println("Res: ",  norm(A*u_cg - f) / norm(f))
+#     println("Err: ",  norm(u_cg - u_ex))
+
+#     du_ex = dsol(dof_support)
+#     err_l2, err_h1 = compute_errors(u, u_ex, du_ex, fespace, mesh, dof_map)
+#     println(err_l2, " ", err_h1)
+
+#     println("------------------------------------------------")
+#   end
+# end
+
+# # b = @benchmark cg(x->A*x, f, x0, 1e-10)
+# # print_benckmark(b)

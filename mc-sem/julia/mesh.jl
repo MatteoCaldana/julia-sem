@@ -37,7 +37,7 @@ function tuple_idx(prod::Vector{Int64}, id::Int64)
   dim = length(prod) - 1
   tid = Vector{Int64}(undef, dim)
   for j = 1:dim
-    tid[j] = div((id - 1) % prod[j+1], prod[j])
+    @inbounds tid[j] = div((id - 1) % prod[j+1], prod[j])
   end
   return tid
 end
@@ -45,7 +45,7 @@ end
 function flat_idx(prod::Vector{Int64}, id::Vector{Int64})
   fid = id[1]
   for j = 2:length(prod)-1
-    fid += id[j] * prod[j]
+    @inbounds fid += id[j] * prod[j]
   end
   return fid + 1
 end
@@ -64,6 +64,23 @@ end
 #      /
 #     /
 #    z
+# first three indexes indicates the cartesian move of the element 
+# the fourth indicates the new id
+const EDGE_ID_TABLE = [
+  [0, 0, 0, 0];; # x bottom far
+  [0, 0, 0, 1];; # y left far 
+  [1, 0, 0, 1];; # y right far
+  [0, 1, 0, 0];; # x top far
+  [0, 0, 0, 2];; # z left bottomp
+  [1, 0, 0, 2];; # z right bottom
+  [0, 1, 0, 2];; # z left top
+  [1, 1, 0, 2];; # z right top
+  [0, 0, 1, 0];; # x bottom near
+  [0, 0, 1, 1];; # y left near
+  [1, 0, 1, 1];; # y right near
+  [0, 1, 1, 0]   # x top near
+]
+const POW2 = [1, 2, 4]
 function get_component_id(mesh::CartesianMesh, eid::Int64, type::Int64, id::Int64)
   id1 = id - 1
   if type == 4 #"element"
@@ -78,7 +95,7 @@ function get_component_id(mesh::CartesianMesh, eid::Int64, type::Int64, id::Int6
       # 4: yz right
       # 5: xz top
       # 6: xy near
-      @assert id <= 6
+      # @assert id <= 6
       if id > 3
         idx[id-3] += 1
         id1 = 5 - id1
@@ -86,29 +103,15 @@ function get_component_id(mesh::CartesianMesh, eid::Int64, type::Int64, id::Int6
       eid = flat_idx(mesh.nprodv, idx)
       return 3 * eid + id1
     elseif type == 2 # "edge"
-      @assert id <= 12
-      # first three indexes indicates the cartesian move of the element 
-      # the fourth indicates the new id
-      TABLE = [
-        [0, 0, 0, 0];; # x bottom far
-        [0, 0, 0, 1];; # y left far 
-        [1, 0, 0, 1];; # y right far
-        [0, 1, 0, 0];; # x top far
-        [0, 0, 0, 2];; # z left bottomp
-        [1, 0, 0, 2];; # z right bottom
-        [0, 1, 0, 2];; # z left top
-        [1, 1, 0, 2];; # z right top
-        [0, 0, 1, 0];; # x bottom near
-        [0, 0, 1, 1];; # y left near
-        [1, 0, 1, 1];; # y right near
-        [0, 1, 1, 0]   # x top near
-      ]
-      idx += TABLE[1:3, id]
+      # @assert id <= 12
+      idx += EDGE_ID_TABLE[1:3, id]
       eid = flat_idx(mesh.nprodv, idx)
-      return 3 * eid + TABLE[4, id]
+      return 3 * eid + EDGE_ID_TABLE[4, id]
     elseif type == 1 #"vertex"
-      @assert id <= 8
-      idx += [id1 & 1, (id1 & 2) > 0, (id1 & 4) > 0]
+      # @assert id <= 8
+      for i = 1:3
+        @inbounds idx[i] += (id1 & POW2[i]) > 0
+      end
       return flat_idx(mesh.nprodv, idx)
     end
   end
@@ -146,19 +149,19 @@ function get_reference_dof(deg::Int64, dim::Int64)::Matrix{Int64}
   end
   degp = deg + 1
   ndofs = degp^dim
-  
+
   # 2^dim   == vertexes
   # 2^dim-1 == edges
   # 2^dim-2 == faces
   # 2^dim-3 == cubes
   # ...
   dof_1d = [2, ones(Int64, deg - 1)..., 2]
-  cart_prod = map(prod, Base.product(ntuple(x->dof_1d, dim)...))
+  cart_prod = map(prod, Base.product(ntuple(x -> dof_1d, dim)...))
   cart_prod_f = (dim - 62) .+ leading_zeros.(reshape(cart_prod, ndofs))
 
   # id for each component (vertex, edge, ...), different components have different ids
   ids = zeros(Int64, ndofs)
-  curr_max_ids = ones(Int64, dim+1)
+  curr_max_ids = ones(Int64, dim + 1)
   for i = 1:ndofs
     neighbours = find_neighbours(i, dim, degp)
     found = false
@@ -181,7 +184,7 @@ end
 
 function element_transform(mesh::CartesianMesh, id::Int64, pt::Vector{Float64})::Vector{Float64}
   el_idx = tuple_idx(mesh.nprod, id)
-  return mesh.jd .* ( pt + 2 * el_idx .+ 1.0) + mesh.corner_a
+  return mesh.jd .* (pt + 2 * el_idx .+ 1.0) + mesh.corner_a
 end
 
 function distribute_dof(grid::Mesh, deg::Int64)::Tuple{Matrix{Int64},Matrix{Float64}}
@@ -217,7 +220,7 @@ function distribute_dof(grid::Mesh, deg::Int64)::Tuple{Matrix{Int64},Matrix{Floa
           end
           dof_map[i, j] = curr_dof_id
           push!(table[type, comp], curr_dof_id)
-          push!(dof_support, element_transform(grid, i, rx[tuple_idx(degp.^[0:grid.dim;], j) .+ 1]))
+          push!(dof_support, element_transform(grid, i, rx[tuple_idx(degp .^ [0:grid.dim;], j).+1]))
           curr_dof_id += 1
         end
       end
