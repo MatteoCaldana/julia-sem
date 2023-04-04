@@ -278,6 +278,24 @@ function stiff_3d_sp(w, d, jx, jy, jz)
   return A
 end
 
+struct FESpace
+  n::Int64
+  np::Int64
+  x::Vector{Float64}
+  w::Vector{Float64}
+  d::Matrix{Float64}
+
+  x_128::Vector{Float128}
+  w_128::Vector{Float128}
+  d_128::Matrix{Float128}
+
+  function FESpace(n::Int64)
+    x, w = xwlgl(n + 1)
+    d = derlgl(x)
+    return new(n, n + 1, Float64.(x), Float64.(w), Float64.(d), x, w, d)
+  end
+end
+
 
 function print_benckmark(b)
   io = IOBuffer()

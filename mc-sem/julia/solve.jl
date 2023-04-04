@@ -1,26 +1,8 @@
 include("core.jl")
 include("mesh.jl")
+include("csr.jl")
 
 using MAT 
-
-
-struct FESpace
-  n::Int64
-  np::Int64
-  x::Vector{Float64}
-  w::Vector{Float64}
-  d::Matrix{Float64}
-
-  x_128::Vector{Float128}
-  w_128::Vector{Float128}
-  d_128::Matrix{Float128}
-
-  function FESpace(n::Int64)
-    x, w = xwlgl(n + 1)
-    d = derlgl(x)
-    return new(n, n + 1, Float64.(x), Float64.(w), Float64.(d), x, w, d)
-  end
-end
 
 function assemble_local(fe::FESpace, mesh::Mesh)
   Aloc = Float64.(stiff_3d_sp(fe.w_128, fe.d_128, mesh.jd[1], mesh.jd[2], mesh.jd[3]))
@@ -28,7 +10,6 @@ function assemble_local(fe::FESpace, mesh::Mesh)
   Mloc *= mesh.jd[1] * mesh.jd[2] * mesh.jd[3]
   return Aloc, Mloc
 end
-
 
 function cg(Avmult, b, x, tol)
   r = b - Avmult(x)
@@ -60,13 +41,12 @@ function cg(Avmult, b, x, tol)
 end
 
 function compute_errors(u, un, dun, fe, mesh, dof_map)
-  dim = Int64(round(log(size(dof_map, 2)) / log(length(fe.w)), RoundNearest))
+  dim = Int64(round(log(size(dof_map, 1)) / log(length(fe.w)), RoundNearest))
   ww = map(prod, Base.product(ntuple(x -> fe.w, dim)...))
   ww = reshape(ww, length(ww))
   l2_err = 0
   h1_err = 0
-  for i = 1:size(dof_map, 1)
-    li = dof_map[i, :]
+  for li in eachcol(dof_map)
     j = mesh.jd[1] * mesh.jd[2] * mesh.jd[3]
     l2_err += j * sum((u[li] - un[li]) .^ 2 .* ww)
 
@@ -116,38 +96,55 @@ end
 
 function vmult(Aloc, x, dof_map, bc)
   y = zeros(Float64, size(x))
-  for i = 1:size(dof_map, 1)
-    y[dof_map[i, :]] += Aloc * x[dof_map[i, :]]
+  for i in axes(dof_map, 2)
+    for j in axes(dof_map, 1)
+      @inbounds jj = dof_map[j, i]
+      @inbounds @simd for k = Aloc.row_ptr[j] + 1 : Aloc.row_ptr[j+1]
+        @inbounds y[jj] += Aloc.val[k] * x[dof_map[Aloc.col_ind[k], i]]
+      end
+    end 
   end
-  y[bc] = x[bc]
+  @simd for i in eachindex(bc)
+    @inbounds y[bc[i]] = x[bc[i]]
+  end
   return y
 end
 
-degs = [1, 2, 3, 4]
-nels = [4, 8, 16, 32]
+degs = [1:8;]
+nels = 2 .^ (degs .+ 1)
 err_table = zeros(Float64, length(nels), length(degs), 4)
-for i = 1:length(nels)
-  for j = 1:length(degs)
+elapsed_times = zeros(Float64, 3, 0)
+
+for i in eachindex(nels)
+  for j in eachindex(degs)
     nel = nels[i]
     deg = degs[j]
     println("Basis deg: ", deg)
     println("#elements: ", nel, " (per dimension)")
+    ndof = (nel * deg + 1)^3
+    println("Problem has ", ndof, " dofs")
+
+    if ndof > 2500000
+      println("Skip")
+      println("-------------------------------------")
+      continue
+    end
+
     println("Building FE space")
     fespace = FESpace(deg)
     println("Building mesh")
     mesh = CartesianMesh([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0], nel*[1, 1, 1])
     println("Distributing dof")
     dof_map, dof_support = distribute_dof(mesh, deg)
-    ndof = dof_map[end, end]
-    println("Problem has ", ndof, " dofs")
+    
     println("Assembling system")
     Aloc, Mloc = assemble_local(fespace, mesh)
     Adloc = diag(Aloc)
     M = zeros(Float64, ndof)
     Ad = zeros(Float64, ndof)
-    for i = 1:size(dof_map, 1)
-      M[dof_map[i, :]] += Mloc
-      Ad[dof_map[i, :]] += Adloc
+    for idx in eachcol(dof_map)
+      M[idx] += Mloc
+      Ad[idx] += Adloc
     end
     f = force(dof_support) .* M
     println("Evaluating exact solution")
@@ -160,8 +157,9 @@ for i = 1:length(nels)
     x0[bc] = u_ex[bc]
 
     println("Solving system with CG")
-    Aloc = sparse(Aloc) # it is CSC, with is suboptimal for vmult
-    @time it, u = cg(x->vmult(Aloc, x, dof_map, bc), f, x0, 1e-14)
+    #Aloc = sparse(Aloc) # WARNING: it is CSC, with is suboptimal for vmult
+    Aloc = CSR(Aloc)
+    t = @elapsed it, u = cg(x->vmult(Aloc, x, dof_map, bc), f, x0, 1e-8)
     println("Computing error")
     println("Res: ",  norm(vmult(Aloc, u, dof_map, bc) - f) / norm(f))
     println("Err: ",  norm(u - u_ex))
@@ -174,6 +172,10 @@ for i = 1:length(nels)
     err_table[i, j, 2] = norm(u - u_ex, Inf)
     err_table[i, j, 3] = err_l2
     err_table[i, j, 4] = err_h1
+
+    global elapsed_times
+    elapsed_times = hcat(elapsed_times, [t, deg, ndof])
+    display(elapsed_times)
     println("-------------------------------------")
   end
 end

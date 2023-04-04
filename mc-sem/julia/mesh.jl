@@ -133,7 +133,7 @@ function find_neighbours(id::Int64, dim::Int64, degp::Int64)
   deltas = hcat(I(dim), -I(dim))
   neighbours = []
 
-  for i = 1:size(deltas, 2)
+  for i in axes(deltas, 2)
     candidate_neighbour = idx + deltas[:, i]
     if in_range(candidate_neighbour, degp)
       push!(neighbours, flat_idx(prod, candidate_neighbour))
@@ -165,7 +165,7 @@ function get_reference_dof(deg::Int64, dim::Int64)::Matrix{Int64}
   for i = 1:ndofs
     neighbours = find_neighbours(i, dim, degp)
     found = false
-    for j = 1:length(neighbours)
+    for j in eachindex(neighbours)
       n = neighbours[j]
       if cart_prod_f[n] == cart_prod_f[i] && ids[n] != 0
         found = true
@@ -193,24 +193,24 @@ function distribute_dof(grid::Mesh, deg::Int64)::Tuple{Matrix{Int64},Matrix{Floa
   rx, _ = xwlgl(degp)
   rx = Float64.(rx)
 
-  dof_map = zeros(Int64, grid.nelem, size(reference_dof, 1))
+  dof_map = zeros(Int64, size(reference_dof, 1), grid.nelem)
   dof_support = Vector{Vector{Float64}}(undef, 0)
   # lookup table to check if already enumerated
   table = Array{Vector{Int64}}(undef, grid.dim + 1, 4 * grid.nvert + 10)
   curr_dof_id = 1
 
-  for i = 1:size(dof_map, 1)
-    for j = 1:size(dof_map, 2)
+  for i in axes(dof_map, 2)
+    for j in axes(dof_map, 1)
       type = reference_dof[j, 1]
       id = reference_dof[j, 2]
       comp = get_component_id(grid, i, type, id)
 
-      if dof_map[i, j] == 0
+      if dof_map[j, i] == 0
         if isassigned(table, type, comp) && length(table[type, comp]) == (deg - 1)^(type - 1)
           idx = 1
-          for k = 1:size(dof_map, 2)
+          for k in axes(dof_map, 1)
             if (reference_dof[k, 1] == type) && (reference_dof[k, 2] == id)
-              dof_map[i, k] = table[type, comp][idx]
+              dof_map[k, i] = table[type, comp][idx]
               idx += 1
             end
           end
@@ -218,7 +218,7 @@ function distribute_dof(grid::Mesh, deg::Int64)::Tuple{Matrix{Int64},Matrix{Floa
           if !isassigned(table, type, comp)
             table[type, comp] = zeros(Int64, 0)
           end
-          dof_map[i, j] = curr_dof_id
+          dof_map[j, i] = curr_dof_id
           push!(table[type, comp], curr_dof_id)
           push!(dof_support, element_transform(grid, i, rx[tuple_idx(degp .^ [0:grid.dim;], j).+1]))
           curr_dof_id += 1
