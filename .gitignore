@@ -1,4 +1,5 @@
 .vscode/
 **/build/
 **/*.so
-*__pycache__*
+*.mat
+*.gz
