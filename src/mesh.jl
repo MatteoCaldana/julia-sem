@@ -229,13 +229,91 @@ function distribute_dof(grid::Mesh, deg::Int64)::Tuple{Matrix{Int64},Matrix{Floa
   return dof_map, hcat(dof_support...)
 end
 
+function distribute_dof_v2(grid::Mesh, deg::Int64)::Tuple{Matrix{Int64},Matrix{Float64}}
+  degp = deg + 1
+  rx, _ = xwlgl(degp)
+  rx = Float64.(rx)
+
+  dof_map = zeros(Int64, degp^grid.dim, grid.nelem)
+  ndof = prod(grid.ns * deg .+ 1)
+  dof_support = zeros(Float64, grid.dim, ndof)
+
+  nprod_dof = ones(Int64, grid.dim + 1)
+  for i = 1:grid.dim
+    nprod_dof[i+1] = nprod_dof[i] * (grid.ns[i] * deg + 1)
+  end
+
+  ci_exp = vec(collect(Base.Iterators.product(Base.Iterators.repeated(0:deg, grid.dim)...)))
+  ci_exp = [tup[k] for k in 1:grid.dim, tup in ci_exp]
+  ci_exp_1 = ci_exp .+ 1
+
+  need = ones(Bool, ndof)
+  for i in axes(dof_map, 2)
+    @inbounds ci = tuple_idx(grid.nprod, i) * deg
+    for j in axes(dof_map, 1)
+      @inbounds fi = flat_idx(nprod_dof, ci + ci_exp[:, j])
+      @inbounds dof_map[j, i] = fi
+      if need[fi] 
+        @inbounds dof_support[:, fi] = element_transform(grid, i, rx[ci_exp_1[:, j]])
+      end
+      @inbounds need[fi] = false
+    end
+  end
+
+  return dof_map, dof_support
+
+end
+
 function find_bc(mesh::CartesianMesh, pts)
   EPS = 1e-15
   is_bc = sum((abs.(pts .- mesh.corner_a) .< EPS) + (abs.(pts .- mesh.corner_b) .< EPS), dims=1)
   return findall(x -> x > 0, vec(is_bc))
 end
 
-# mesh = CartesianMesh([-1., -1., -1.], [1., 1., 1.], [2, 2, 2])
-# dof_map, dof_support = distribute_dof(mesh, 2)
-# display(dof_map')
-# println(size(dof_support), dof_support)
+function test_dof_mapping_compatibility()
+  # test that the element support in independent of the dof mapping
+  for deg = 1:8
+    for nel = 1:8
+      mesh = CartesianMesh([-1., -1., -1.], [1., 1., 1.], nel*[1, 1, 1])
+      dmap1, dsup1 = distribute_dof_v2(mesh, deg)
+      dmap2, dsup2 = distribute_dof(mesh, deg)
+      
+      err = 0.0
+      for i in axes(dmap1, 2)
+        err += maximum(abs.(dsup1[:, dmap1[:, i]] - dsup2[:, dmap2[:, i]]))
+      end
+      println(deg, " ", nel, " ", err)
+    end
+  end
+end
+
+# for dof mapping v2
+function projection_element_mapping(grid::CartesianMesh, deg::Int64)::Matrix{Int64}
+  dof_map = zeros(Int64, (2 * deg + 1)^grid.dim, grid.nelem)
+
+  nprod_dof = ones(Int64, grid.dim + 1)
+  for i = 1:grid.dim
+    nprod_dof[i+1] = nprod_dof[i] * (2 * grid.ns[i] * deg + 1)
+  end
+
+  ci_exp = vec(collect(Base.Iterators.product(Base.Iterators.repeated(0:2*deg, grid.dim)...)))
+
+  for i in axes(dof_map, 2)
+    @inbounds ci = tuple_idx(grid.nprod, i) * deg
+    for j in axes(dof_map, 1)
+      @inbounds dof_map[j, i] = flat_idx(nprod_dof, 2*ci + collect(ci_exp[j]))
+    end
+  end
+
+  return dof_map
+end
+
+# deg = 4
+# nel = 4
+# mesh = CartesianMesh([-1., -1., -1.], [1., 1., 1.], nel*[1, 1, 1])
+
+# b = @benchmark distribute_dof_v2(mesh, deg)
+# print_benckmark(b)
+
+# b = @benchmark distribute_dof(mesh, deg)
+# print_benckmark(b)

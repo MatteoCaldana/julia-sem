@@ -278,24 +278,83 @@ function stiff_3d_sp(w, d, jx, jy, jz)
   return A
 end
 
+function to_float64_fix_subnormal(x)
+  return ifelse.(abs.(x) .< Float128(2.0 * eps(Float64)), 0.0, Float64.(x))
+end
+
 struct FESpace
   n::Int64
   np::Int64
-  x::Vector{Float64}
-  w::Vector{Float64}
-  d::Matrix{Float64}
+
+  x::Vector{Float64}        # 1D reference coordinates of the interpolation nodes
+  w::Vector{Float64}        # 1D weights for gll quadrature
+  D::Matrix{Float64}        # 1D derivative of Lagrange interpolants at the interpolation nodes
+                            # the same of (derlgl, derlgl_v2, transpose(V \ gradV))
+  V::Matrix{Float64}        # 1D Vandermonde matrix of Legendre polynomials
+  gradV::Matrix{Float64}    #    and their derivative (Nrp x Nrp)
+  Ph::Matrix{Float64}       # interpolation from this element to its 4/8 children
+  Pp::Matrix{Float64}       # interpolation from this element to its 2p version
+  M::Matrix{Float64}        # exact 1D Mass matrix (Nrp x Nrp) at gll
 
   x_128::Vector{Float128}
   w_128::Vector{Float128}
-  d_128::Matrix{Float128}
+  D_128::Matrix{Float128}
+  V_128::Matrix{Float128}
+  gradV_128::Matrix{Float128}
+  Ph_128::Matrix{Float128}
+  Pp_128::Matrix{Float128}
+  M_128::Matrix{Float128}
 
   function FESpace(n::Int64)
-    x, w = xwlgl(n + 1)
+    np = n + 1
+    x, w = xwlgl(np)
     d = derlgl(x)
-    return new(n, n + 1, Float64.(x), Float64.(w), Float64.(d), x, w, d)
+
+    x_hby2  = [Float128(0.5)*(x .- Float128(1))...; Float128(0.5)*(x[2:end] .+ Float128(1))...]
+    x_2p, _ = xwlgl(2*n + 1)
+
+    V     = zeros(Float128, np, np)
+    gradV = zeros(Float128, np, np)
+    Vph   = zeros(Float128, np, 2*n+1)
+    Vpp   = zeros(Float128, np, 2*n+1)
+    for i=1:np
+      p, pd = jacobi_eval(x, i-1, Float128(0.0), Float128(0.0))
+      V[i,:]     = p
+      gradV[i,:] = pd
+      Vph[i,:]   = jacobi_eval(x_hby2, i-1, Float128(0.0), Float128(0.0))[1]
+      Vpp[i,:]   = jacobi_eval(x_2p,   i-1, Float128(0.0), Float128(0.0))[1]
+    end
+
+    #D = transpose(V \ gradV);
+
+    p_h_1d = transpose(V \ Vph);
+    p_p_1d = transpose(V \ Vpp);
+
+    iV    = inv(V);
+    M     = iV * iV';
+    invM  = inv(M);
+
+
+    return new(n, np, 
+      to_float64_fix_subnormal(x), 
+      to_float64_fix_subnormal(w), 
+      to_float64_fix_subnormal(d),
+      to_float64_fix_subnormal(V),
+      to_float64_fix_subnormal(gradV),
+      to_float64_fix_subnormal(p_h_1d),
+      to_float64_fix_subnormal(p_p_1d),
+      to_float64_fix_subnormal(M),
+      x, 
+      w, 
+      d,
+      V,
+      gradV,
+      p_h_1d,
+      p_p_1d,
+      M,    
+    )
   end
 end
-
 
 function print_benckmark(b)
   io = IOBuffer()
@@ -328,8 +387,7 @@ end
 # small = Float128(1e-33)
 # println(small, Float64(small))
 
-function bench()
-  n = 8
+function bench(n)
   np = n + 1
   println("========================================================")
   println("n: ", n)
@@ -341,25 +399,25 @@ function bench()
   A = Float64.(stiff_3d_sp(w, d, 1.0, 1.0, 1.0))
   u = rand(size(A, 1))
 
-  b = @benchmark v = A * u
+  b = @benchmark v = $A * $u
   print_benckmark(b)
   println("--------------------------------------------------------")
   println("Kron trick")
 
   d64 = Float64.(derlgl(x))
-  b = @benchmark v = d64 * reshape(u, np, np * np)
+  b = @benchmark v = $d64 * reshape($u, $np, $np * $np)
   print_benckmark(b)
 
   println("--------------------------------------------------------")
   println("Sparse CSC")
   Asp = sparse(A)
   println(nnz(Asp), " ", nnz(Asp) / length(A), " ", sum(abs.(A) .> 0.0), " ", sum(abs.(A) .> 1e-12))
-  b = @benchmark v = Asp * u
+  b = @benchmark v = $Asp * $u
   print_benckmark(b)
 
   println("--------------------------------------------------------")
   println("Sparse CSC transpose")
-  b = @benchmark v = transpose(Asp) * u
+  b = @benchmark v = transpose($Asp) * $u
   print_benckmark(b)
 
   println("--------------------------------------------------------")
@@ -387,7 +445,7 @@ function bench()
     return y
   end
 
-  b = @benchmark v = mul(a, c, r, u)
+  b = @benchmark v = $mul($a, $c, $r, $u)
   print_benckmark(b)
 
   println("========================================================")
@@ -395,3 +453,6 @@ end
 
 
 
+# for n = [1, 2, 4, 8]
+#   bench(n)
+# end

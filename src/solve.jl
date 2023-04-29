@@ -3,9 +3,10 @@ include("mesh.jl")
 include("csr.jl")
 
 using MAT 
+#using MKL
 
 function assemble_local(fe::FESpace, mesh::Mesh)
-  Aloc = Float64.(stiff_3d_sp(fe.w_128, fe.d_128, mesh.jd[1], mesh.jd[2], mesh.jd[3]))
+  Aloc = Float64.(stiff_3d_sp(fe.w_128, fe.D_128, mesh.jd[1], mesh.jd[2], mesh.jd[3]))
   Mloc = Float64.(reshape(map(prod, Base.product(ntuple(x -> fe.w_128, mesh.dim)...)), length(fe.w)^mesh.dim))
   Mloc *= mesh.jd[1] * mesh.jd[2] * mesh.jd[3]
   return Aloc, Mloc
@@ -56,9 +57,9 @@ function compute_errors(u, un, dun, fe, mesh, dof_map)
     uz = Array{Float64}(undef, size(u_loc))
     for i = 1:length(fe.w)
       for j = 1:length(fe.w)
-        ux[:, i, j] = fe.d * u_loc[:, i, j] / mesh.jd[1]
-        uy[i, :, j] = fe.d * u_loc[i, :, j] / mesh.jd[2]
-        uz[i, j, :] = fe.d * u_loc[i, j, :] / mesh.jd[3]
+        ux[:, i, j] = fe.D * u_loc[:, i, j] / mesh.jd[1]
+        uy[i, :, j] = fe.D * u_loc[i, :, j] / mesh.jd[2]
+        uz[i, j, :] = fe.D * u_loc[i, j, :] / mesh.jd[3]
       end
     end
     ux = reshape(ux, length(ux))
@@ -111,7 +112,7 @@ function vmult(Aloc, x, dof_map, bc)
 end
 
 degs = [1:8;]
-nels = 2 .^ (degs .+ 1)
+nels = 2 .^ [0:8;]
 err_table = zeros(Float64, length(nels), length(degs), 4)
 elapsed_times = zeros(Float64, 3, 0)
 
@@ -124,7 +125,7 @@ for i in eachindex(nels)
     ndof = (nel * deg + 1)^3
     println("Problem has ", ndof, " dofs")
 
-    if ndof > 2500000
+    if ndof > 1000000
       println("Skip")
       println("-------------------------------------")
       continue
@@ -135,7 +136,7 @@ for i in eachindex(nels)
     println("Building mesh")
     mesh = CartesianMesh([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0], nel*[1, 1, 1])
     println("Distributing dof")
-    dof_map, dof_support = distribute_dof(mesh, deg)
+    dof_map, dof_support = distribute_dof_v2(mesh, deg)
     
     println("Assembling system")
     Aloc, Mloc = assemble_local(fespace, mesh)
