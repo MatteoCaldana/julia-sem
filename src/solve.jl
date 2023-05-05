@@ -1,6 +1,8 @@
 include("core.jl")
 include("mesh.jl")
 include("csr.jl")
+include("solvers.jl")
+include("matrix_free_utils.jl")
 
 using MAT 
 #using MKL
@@ -10,35 +12,6 @@ function assemble_local(fe::FESpace, mesh::Mesh)
   Mloc = Float64.(reshape(map(prod, Base.product(ntuple(x -> fe.w_128, mesh.dim)...)), length(fe.w)^mesh.dim))
   Mloc *= mesh.jd[1] * mesh.jd[2] * mesh.jd[3]
   return Aloc, Mloc
-end
-
-function cg(Avmult, b, x, tol)
-  r = b - Avmult(x)
-  p = r
-  rsold = r' * r
-  if sqrt(rsold) < tol
-    println("No iterations needed")
-    return 0, x
-  end
-
-  i = 1
-  while i <= length(b)
-    Ap = Avmult(p)
-    alpha = rsold / (p' * Ap)
-    x += alpha * p
-    r -= alpha * Ap
-    rsnew = r' * r
-    if sqrt(rsnew) < tol
-      rsold = rsnew
-      break
-    end
-    p = r + (rsnew / rsold) * p
-    rsold = rsnew
-    i += 1
-  end
-  println("Residual:   ", sqrt(rsold))
-  println("Iterations: ", i)
-  return i, x
 end
 
 function compute_errors(u, un, dun, fe, mesh, dof_map)
@@ -94,6 +67,14 @@ function dsol(xyz)
         -pi2*sinxyz[1, :].*sinxyz[2, :].*sinxyz[3, :], 
          pi2*sinxyz[1, :].*cosxyz[2, :].*cosxyz[3, :]
 end
+
+# function force(xyz)
+#   return 12 * π * π * sin.(2 * π * xyz[1, :]) .* sin.(2 * π * xyz[2, :]) .* sin.(2 * π * xyz[3, :])
+# end
+
+# function sol(xyz)
+#   return sin.(2 * π * xyz[1, :]) .* sin.(2 * π * xyz[2, :]) .* sin.(2 * π * xyz[3, :])
+# end
 
 function vmult(Aloc, x, dof_map, bc)
   y = zeros(Float64, size(x))
@@ -160,6 +141,9 @@ for i in eachindex(nels)
     println("Solving system with CG")
     #Aloc = sparse(Aloc) # WARNING: it is CSC, with is suboptimal for vmult
     Aloc = CSR(Aloc)
+    # A = materialize_linear_map(x->vmult(Aloc, x, dof_map, bc), ndof, ndof)
+    # display(A)
+    # t = @elapsed u = jacobi(x->vmult(Aloc, x, dof_map, bc), f, x0, 50, 1 ./Ad)
     t = @elapsed it, u = cg(x->vmult(Aloc, x, dof_map, bc), f, x0, 1e-8)
     println("Computing error")
     println("Res: ",  norm(vmult(Aloc, u, dof_map, bc) - f) / norm(f))

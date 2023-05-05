@@ -264,7 +264,7 @@ function distribute_dof_v2(grid::Mesh, deg::Int64)::Tuple{Matrix{Int64},Matrix{F
 
 end
 
-function find_bc(mesh::CartesianMesh, pts)
+function find_bc(mesh::CartesianMesh, pts)::Vector{Int64}
   EPS = 1e-15
   is_bc = sum((abs.(pts .- mesh.corner_a) .< EPS) + (abs.(pts .- mesh.corner_b) .< EPS), dims=1)
   return findall(x -> x > 0, vec(is_bc))
