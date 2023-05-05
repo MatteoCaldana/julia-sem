@@ -3,6 +3,7 @@ include("mesh.jl")
 include("csr.jl")
 include("solvers.jl")
 include("matrix_free_utils.jl")
+include("mg.jl")
 
 using MAT 
 #using MKL
@@ -92,8 +93,8 @@ function vmult(Aloc, x, dof_map, bc)
   return y
 end
 
-degs = [1:8;]
-nels = 2 .^ [0:8;]
+degs = [1]
+nels = 2 .^ [3]
 err_table = zeros(Float64, length(nels), length(degs), 4)
 elapsed_times = zeros(Float64, 3, 0)
 
@@ -144,6 +145,31 @@ for i in eachindex(nels)
     # A = materialize_linear_map(x->vmult(Aloc, x, dof_map, bc), ndof, ndof)
     # display(A)
     # t = @elapsed u = jacobi(x->vmult(Aloc, x, dof_map, bc), f, x0, 50, 1 ./Ad)
+    function vmult_debug(x::Vector{Float64}, dof_map::Matrix{Int64}, bc::Vector{Int64})
+      println(maximum(dof_map), " ", length(x))
+      y = zeros(Float64, size(x))
+      for i in axes(dof_map, 2)
+        for j in axes(dof_map, 1)
+          jj = dof_map[j, i]
+          for k = Aloc.row_ptr[j] + 1 : Aloc.row_ptr[j+1]
+            y[jj] += Aloc.val[k] * x[dof_map[Aloc.col_ind[k], i]]
+          end
+        end 
+      end
+      for i in eachindex(bc)
+        y[bc[i]] = x[bc[i]]
+      end
+      return y
+    end
+    function get_diag(dof_map::Matrix{Int64})
+      Ad = zeros(Float64, dof_map[end, end])
+      for idx in eachcol(dof_map)
+        Ad[idx] += Adloc
+      end
+      return Ad
+    end
+    mglvl = MGLevel(deg, mesh, sol)
+    solve_mg(mglvl, vmult_debug, get_diag, 10, 3, 3, f, x0, 1e-8)
     t = @elapsed it, u = cg(x->vmult(Aloc, x, dof_map, bc), f, x0, 1e-8)
     println("Computing error")
     println("Res: ",  norm(vmult(Aloc, u, dof_map, bc) - f) / norm(f))

@@ -63,19 +63,20 @@ function pcg(Avmult, b, Pvmult, x, tol)
   return i, x
 end
 
-function jacobi(Avmult, b, x, nit, invD_omega)
+function jacobi(Avmult, b::Vector{Float64}, x::Vector{Float64}, nit::Int64, invD_omega::Vector{Float64})::Vector{Float64}
   for it = 1:nit
     x += invD_omega .* (b - Avmult(x));
   end
   return x
 end
 
-function solve_mg(grid, Avmult, invD_omega, num_vcyc, v1, v2, b, x, tol)
+function solve_mg(grid, vmult_generic, get_diag, num_vcyc, v1, v2, b, x, tol)
+  Avmult = x->vmult_generic(x, grid.dof_map, grid.boundary_idxs)
   r = Avmult(x) - b;
   r0 = norm(r);
   println("Initial residual is: ", r0)
   for i=1:num_vcyc
-      x = vcycle(grid, Avmult, invD_omega, v1, v2, b, x);
+      x = vcycle(grid, vmult_generic, get_diag, v1, v2, b, x);
       r = Avmult(x) - b;
       println("|res| = ", norm(r))
       if (norm(r)/r0 < tol)
@@ -90,17 +91,18 @@ function solve_mg(grid, Avmult, invD_omega, num_vcyc, v1, v2, b, x, tol)
   return iter, x
 end
 
-function vcycle(grid, Avmult, invD_omega, v1, v2, b, x)
-
+function vcycle(grid, vmult_generic, get_diag, v1, v2, b, x)::Vector{Float64}
+  Avmult = x->vmult_generic(x, grid.dof_map, grid.boundary_idxs)
   if ( !grid.has_coarse )
-    return cg(Avmult, b, x, 1e-15)
+    return cg(Avmult, b, x, 1e-15)[2] #discard number of iterations
   end
-
+  # TODO: cache invD_omega
+  invD_omega = 1 ./ get_diag(grid.dof_map)
   x = jacobi(Avmult, b, x, v1, invD_omega)
   res = Avmult(x) - b;
   res_coarse = projection_vmult(grid.coarse, res);
   res_coarse[grid.coarse.boundary_idxs] = grid.coarse.boundary_values;
-  x_corr_coarse = vcycle(grid.coarse, Avmult, invD_omega, v1, v2, res_coarse, zeros(size(res_coarse)));
+  x_corr_coarse = vcycle(grid.coarse, vmult_generic, get_diag, v1, v2, res_coarse, zeros(size(res_coarse)));
   x -= interpolation_vmult(grid.coarse, x_corr_coarse);
   x = jacobi(Avmult, b, x, v2, invD_omega)
   return x

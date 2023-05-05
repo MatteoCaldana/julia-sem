@@ -1,5 +1,6 @@
 include("mesh.jl")
 include("core.jl")
+include("matrix_free_utils.jl")
 
 struct MGLevel
   refel::FESpace
@@ -55,31 +56,36 @@ end
 # TODO: check this matches homg
 function interpolation_vmult(lvl::MGLevel, x::Vector{Float64})::Vector{Float64}
   y = zeros(Float64, lvl.ndofs_fine)
-
   for ie in axes(lvl.dof_map_to_fine, 2)
-    for j in axes(lvl.dof_map_to_fine, 1)
-      y[lvl.dof_map_to_fine[:, ie]] += lvl.Ph * x[lvl.dof_map[:, ie]] 
-    end 
+    y[lvl.dof_map_to_fine[:, ie]] += lvl.Ph * x[lvl.dof_map[:, ie]] 
   end
-
   return y
 end
 
-# TODO: check this is equal to the transpose of the above
 function projection_vmult(lvl::MGLevel, x::Vector{Float64})::Vector{Float64}
   y = zeros(Float64, lvl.ndofs)
-
   for ie in axes(lvl.dof_map, 2)
-    for j in axes(lvl.dof_map, 1)
-      y[lvl.dof_map[:, ie]] += transpose(lvl.Ph) * x[lvl.dof_map_to_fine[:, ie]] 
-    end 
+    y[lvl.dof_map[:, ie]] += transpose(lvl.Ph) * x[lvl.dof_map_to_fine[:, ie]] 
   end
-
   return y
 end
 
-nel = 4
-mesh = CartesianMesh([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0], nel*[1, 1, 1])
-mglvl = MGLevel(1, mesh, xyz -> zeros(size(xyz, 2)))
+function test_transpose()
+  nel = 2
+  for deg = [1, 2, 3]
+    mesh = CartesianMesh([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0], nel*[1, 1, 1])
+    bc = xyz -> zeros(size(xyz, 2))
+    mglvl = MGLevel(deg, mesh, bc)
 
-interpolation_vmult(mglvl, ones(mglvl.ndofs))
+    lvl = mglvl
+    while true
+      I = materialize_linear_map(x -> interpolation_vmult(lvl, x), lvl.ndofs_fine, lvl.ndofs)
+      P = materialize_linear_map(x -> projection_vmult(lvl, x),    lvl.ndofs, lvl.ndofs_fine)
+      println("deg: ", deg, " ndofs:", lvl.ndofs, " ", all(P.==I'))
+      lvl.has_coarse || break
+      lvl = lvl.coarse
+    end
+  end
+end
+
+#test_transpose()
