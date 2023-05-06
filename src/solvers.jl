@@ -63,11 +63,33 @@ function pcg(Avmult, b, Pvmult, x, tol)
   return i, x
 end
 
-function jacobi(Avmult, b::Vector{Float64}, x::Vector{Float64}, nit::Int64, invD_omega::Vector{Float64})::Vector{Float64}
-  for it = 1:nit
-    x += invD_omega .* (b - Avmult(x));
+function jacobi(Avmult, 
+  b::Vector{Float64}, 
+  x::Vector{Float64}, 
+  nit::Int64, 
+  tol::Float64,
+  invD_omega::Vector{Float64})
+
+  r = b - Avmult(x)
+  r0 = norm(r)
+
+  if r0 < tol
+    println("No iterations needed")
+    return 0, x
   end
-  return x
+
+  i = 1
+  while i <= nit
+    r = b - Avmult(x);
+    if norm(r) / r0 < tol
+      break
+    end
+    x += invD_omega .* r;
+    i += 1
+  end
+  println("Residual:   ", norm(r) / r0, "(r0=", r0, ")")
+  println("Iterations: ", i)
+  return i, x
 end
 
 function solve_mg(grid, vmult_generic, get_diag, num_vcyc, v1, v2, b, x, tol)
@@ -94,17 +116,22 @@ end
 function vcycle(grid, vmult_generic, get_diag, v1, v2, b, x)::Vector{Float64}
   Avmult = x->vmult_generic(x, grid.dof_map, grid.boundary_idxs)
   if ( !grid.has_coarse )
+    #TODO: if len(bc_values) == len(x) return bc_values
     return cg(Avmult, b, x, 1e-15)[2] #discard number of iterations
   end
   # TODO: cache invD_omega
   invD_omega = 1 ./ get_diag(grid.dof_map)
-  x = jacobi(Avmult, b, x, v1, invD_omega)
+  for it = 1:v1
+    x += invD_omega .* (b - Avmult(x));
+  end
   res = Avmult(x) - b;
   res_coarse = projection_vmult(grid.coarse, res);
   res_coarse[grid.coarse.boundary_idxs] = grid.coarse.boundary_values;
   x_corr_coarse = vcycle(grid.coarse, vmult_generic, get_diag, v1, v2, res_coarse, zeros(size(res_coarse)));
   x -= interpolation_vmult(grid.coarse, x_corr_coarse);
-  x = jacobi(Avmult, b, x, v2, invD_omega)
+  for it = 1:v2
+    x += invD_omega .* (b - Avmult(x));
+  end
   return x
 end
 
@@ -133,7 +160,7 @@ function chebyshev(Avmult, b, x, nit, eig_max, eig_min)
   #     d = d1 * d + d2 * res.*grid.jacobi_invdiag;
   #     u = u + d;
   # end
-  return u
+  return
 end
 
 function power()

@@ -76,8 +76,12 @@ end
 # function sol(xyz)
 #   return sin.(2 * π * xyz[1, :]) .* sin.(2 * π * xyz[2, :]) .* sin.(2 * π * xyz[3, :])
 # end
+vmult_calls = 0;
 
 function vmult(Aloc, x, dof_map, bc)
+  global vmult_calls
+  vmult_calls += 1
+
   y = zeros(Float64, size(x))
   for i in axes(dof_map, 2)
     for j in axes(dof_map, 1)
@@ -94,7 +98,7 @@ function vmult(Aloc, x, dof_map, bc)
 end
 
 degs = [1]
-nels = 2 .^ [3]
+nels = 2 .^ [4:6;]
 err_table = zeros(Float64, length(nels), length(degs), 4)
 elapsed_times = zeros(Float64, 3, 0)
 
@@ -139,12 +143,9 @@ for i in eachindex(nels)
     f[bc] = u_ex[bc]
     x0[bc] = u_ex[bc]
 
-    println("Solving system with CG")
     #Aloc = sparse(Aloc) # WARNING: it is CSC, with is suboptimal for vmult
     Aloc = CSR(Aloc)
-    # A = materialize_linear_map(x->vmult(Aloc, x, dof_map, bc), ndof, ndof)
-    # display(A)
-    # t = @elapsed u = jacobi(x->vmult(Aloc, x, dof_map, bc), f, x0, 50, 1 ./Ad)
+
     function vmult_debug(x::Vector{Float64}, dof_map::Matrix{Int64}, bc::Vector{Int64})
       println(maximum(dof_map), " ", length(x))
       y = zeros(Float64, size(x))
@@ -161,6 +162,7 @@ for i in eachindex(nels)
       end
       return y
     end
+
     function get_diag(dof_map::Matrix{Int64})
       Ad = zeros(Float64, dof_map[end, end])
       for idx in eachcol(dof_map)
@@ -168,9 +170,28 @@ for i in eachindex(nels)
       end
       return Ad
     end
+
+    global vmult_calls
+
+    println("Solving system with Jacobi")
+    vmult_calls = 0
+    t = @elapsed it, u = jacobi(x->vmult(Aloc, x, dof_map, bc), f, x0, 2000, 1e-8, 1 ./Ad)
+    println("Total vmult calls: ", vmult_calls)
+    println("Solve time: ", t)
+
+    println("Solving system with MG")
+    vmult_calls = 0
     mglvl = MGLevel(deg, mesh, sol)
-    solve_mg(mglvl, vmult_debug, get_diag, 10, 3, 3, f, x0, 1e-8)
+    t = @elapsed it, u = solve_mg(mglvl, (x,d,b)->vmult(Aloc, x, d, b), get_diag, 10, 3, 3, f, x0, 1e-8)
+    println("Total vmult calls: ", vmult_calls)
+    println("Solve time: ", t)
+
+    println("Solving system with CG")
+    vmult_calls = 0
     t = @elapsed it, u = cg(x->vmult(Aloc, x, dof_map, bc), f, x0, 1e-8)
+    println("Total vmult calls: ", vmult_calls)
+    println("Solve time: ", t)
+
     println("Computing error")
     println("Res: ",  norm(vmult(Aloc, u, dof_map, bc) - f) / norm(f))
     println("Err: ",  norm(u - u_ex))
