@@ -93,45 +93,128 @@ function jacobi(Avmult,
 end
 
 function solve_mg(grid, vmult_generic, get_diag, num_vcyc, v1, v2, b, x, tol)
-  Avmult = x->vmult_generic(x, grid.dof_map, grid.boundary_idxs)
+  Avmult = x->vmult_generic(grid.A, x, grid.dof_map, grid.boundary_idxs)
   r = Avmult(x) - b;
   r0 = norm(r);
   println("Initial residual is: ", r0)
   for i=1:num_vcyc
-      x = vcycle(grid, vmult_generic, get_diag, v1, v2, b, x);
+      println("Vcycle iter: ", i)
+      x = vcycle(grid, vmult_generic, get_diag, v1, v2, b, x, i);
       r = Avmult(x) - b;
       println("|res| = ", norm(r))
+      println("======================================================")
+      println("======================================================")
       if (norm(r)/r0 < tol)
           iter = i;
           rr = norm(r)/r0;
-          return;
+          return iter, x;
       end
   end
-  println("------------------------------------------");
   iter = num_vcyc;
   rr = norm(r)/r0;
   return iter, x
 end
 
-function vcycle(grid, vmult_generic, get_diag, v1, v2, b, x)::Vector{Float64}
-  Avmult = x->vmult_generic(x, grid.dof_map, grid.boundary_idxs)
+using MAT
+include("matrix_free_utils.jl")
+
+function fix_subnormal(x)
+  return ifelse.(abs.(x) .< 2.0 * eps(Float64), 0.0, x)
+end
+
+function vcycle(grid, vmult, get_diag, v1, v2, b, x, i)::Vector{Float64}
+  Avmult = x->vmult(grid.A, x, grid.dof_map, grid.boundary_idxs)
+
+  if i == 1
+    if grid.has_coarse
+      Pmat = matread("../test-data/P."*repr(grid.ndofs)*".mat")["PP"]
+      P = Matrix(grid.coarse.P)
+      println("Error P:", maximum(abs.(P - Pmat)))
+
+      Rmat = matread("../test-data/R."*repr(grid.coarse.ndofs)*".mat")["RR"]
+      R = Matrix(grid.coarse.P')
+      println("Error R:", maximum(abs.(R - Rmat)))
+    end
+
+    Amat = matread("../test-data/K."*repr(grid.ndofs)*".mat")["KK"]
+    A = materialize_linear_map(Avmult, grid.ndofs, grid.ndofs)
+    println("Error A:", maximum(abs.(A - Amat)))
+    display(diag(A))
+    display(diag(Amat))
+  end
+
+  bmat = matread("../test-data/rhs."*repr(grid.ndofs)*".it"*repr(i)*".mat")["rhs"]
+  println("Error rhs:", maximum(abs.(b - bmat)))
+
+  xmat = matread("../test-data/u."*repr(grid.ndofs)*".0.it"*repr(i)*".mat")["u"]
+  println("Error x (0):", maximum(abs.(x - xmat)))
+
+
+  # 0. handle coarses level
   if ( !grid.has_coarse )
     #TODO: if len(bc_values) == len(x) return bc_values
     return cg(Avmult, b, x, 1e-15)[2] #discard number of iterations
   end
-  # TODO: cache invD_omega
-  invD_omega = 1 ./ get_diag(grid.dof_map)
+
+  # TODO: save once for all invD_omega
+  invD_omega = 1 ./ get_diag(grid.Ad, grid.dof_map, grid.boundary_idxs)
+  if i == 1
+
+    JiDmat = matread("../test-data/JiD."*repr(grid.ndofs)*".mat")["JiD"]
+    display(grid.A)
+    display(grid.Ad)
+    println("Error JiD:", maximum(abs.(invD_omega - JiDmat)))
+    display(invD_omega)
+    display(JiDmat)
+  end
+
+  # 1. pre-smooth
   for it = 1:v1
     x += invD_omega .* (b - Avmult(x));
   end
+
+  xmat = matread("../test-data/u."*repr(grid.ndofs)*".1.it"*repr(i)*".mat")["u"]
+  println("Error x (1):", maximum(abs.(x - xmat)))
+
+  # 2. compute residual
   res = Avmult(x) - b;
-  res_coarse = projection_vmult(grid.coarse, res);
+
+  resmat = matread("../test-data/res."*repr(grid.ndofs)*".it"*repr(i)*".mat")["res"]
+  println("Error res:", maximum(abs.(res - resmat)))
+
+  # 3. restrict
+  res_coarse = grid.coarse.P' * res;
+  res_coarsemat = matread("../test-data/res_coarse."*repr(grid.coarse.ndofs)*".raw.it"*repr(i)*".mat")["res_coarse"]
+  println("Error res_coarse raw:", maximum(abs.(res_coarse - res_coarsemat)))
+
   res_coarse[grid.coarse.boundary_idxs] = grid.coarse.boundary_values;
-  x_corr_coarse = vcycle(grid.coarse, vmult_generic, get_diag, v1, v2, res_coarse, zeros(size(res_coarse)));
-  x -= interpolation_vmult(grid.coarse, x_corr_coarse);
+
+  bdy_idxmat = matread("../test-data/bdy_idx."*repr(size(grid.coarse.boundary_idxs, 1))*".it"*repr(i)*".mat")["bdy_idx"]
+  println("Error bdy_idx:", maximum(abs.(grid.coarse.boundary_idxs - bdy_idxmat)))
+
+  res_coarsemat = matread("../test-data/res_coarse."*repr(grid.coarse.ndofs)*".bdy.it"*repr(i)*".mat")["res_coarse"]
+  println("Error res_coarse bdy:", maximum(abs.(res_coarse - res_coarsemat)))
+
+  # 4. recurse
+  x_corr_coarse = vcycle(grid.coarse, vmult, get_diag, v1, v2, res_coarse, zeros(size(res_coarse)), i);
+
+  u_corr_coarsemat = matread("../test-data/u_corr_coarse."*repr(grid.coarse.ndofs)*".it"*repr(i)*".mat")["u_corr_coarse"]
+  println("Error u_corr_coarse:", maximum(abs.(x_corr_coarse - u_corr_coarsemat)))
+
+  # 5. prolong and correct
+  x -= grid.coarse.P * x_corr_coarse;
+
+  xmat = matread("../test-data/u."*repr(grid.ndofs)*".5.it"*repr(i)*".mat")["u"]
+  println("Error u (5):", maximum(abs.(x - xmat)))
+
+  # 6. post-smooth
   for it = 1:v2
-    x += invD_omega .* (b - Avmult(x));
+    r = invD_omega .* (Avmult(x) - b);
+    x -= r;
   end
+
+  xmat = matread("../test-data/u."*repr(grid.ndofs)*".6.it"*repr(i)*".mat")["u"]
+  println("Error u (6):", maximum(abs.(x - xmat)))
   return x
 end
 

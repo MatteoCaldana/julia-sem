@@ -52,33 +52,43 @@ end
 #   return sin.(xyz[2, :] .* xyz[3, :]) + xyz[1, :] .^ 3
 # end
 
+# function force(xyz)
+#   return 12 * π * π * sin.(2 * π * xyz[1, :]) .* cos.(2 * π * xyz[2, :]) .* sin.(2 * π * xyz[3, :])
+# end
+
+# function sol(xyz)
+#   return sin.(2 * π * xyz[1, :]) .* cos.(2 * π * xyz[2, :]) .* sin.(2 * π * xyz[3, :])
+# end
+
+# function dsol(xyz)
+#   pi2 = 2 * π
+#   sinxyz = sin.(2 * π * xyz)
+#   cosxyz = cos.(2 * π * xyz)
+#   return pi2*cosxyz[1, :].*cosxyz[2, :].*sinxyz[3, :], 
+#         -pi2*sinxyz[1, :].*sinxyz[2, :].*sinxyz[3, :], 
+#          pi2*sinxyz[1, :].*cosxyz[2, :].*cosxyz[3, :]
+# end
+
 function force(xyz)
-  return 12 * π * π * sin.(2 * π * xyz[1, :]) .* cos.(2 * π * xyz[2, :]) .* sin.(2 * π * xyz[3, :])
+  return 12 * π * π * sin.(2 * π * xyz[1, :]) .* sin.(2 * π * xyz[2, :]) .* sin.(2 * π * xyz[3, :])
 end
 
 function sol(xyz)
-  return sin.(2 * π * xyz[1, :]) .* cos.(2 * π * xyz[2, :]) .* sin.(2 * π * xyz[3, :])
+  return sin.(2 * π * xyz[1, :]) .* sin.(2 * π * xyz[2, :]) .* sin.(2 * π * xyz[3, :])
 end
 
 function dsol(xyz)
   pi2 = 2 * π
   sinxyz = sin.(2 * π * xyz)
   cosxyz = cos.(2 * π * xyz)
-  return pi2*cosxyz[1, :].*cosxyz[2, :].*sinxyz[3, :], 
-        -pi2*sinxyz[1, :].*sinxyz[2, :].*sinxyz[3, :], 
-         pi2*sinxyz[1, :].*cosxyz[2, :].*cosxyz[3, :]
+  return pi2*cosxyz[1, :].*sinxyz[2, :].*sinxyz[3, :], 
+         pi2*sinxyz[1, :].*cosxyz[2, :].*sinxyz[3, :], 
+         pi2*sinxyz[1, :].*sinxyz[2, :].*cosxyz[3, :]
 end
 
-# function force(xyz)
-#   return 12 * π * π * sin.(2 * π * xyz[1, :]) .* sin.(2 * π * xyz[2, :]) .* sin.(2 * π * xyz[3, :])
-# end
-
-# function sol(xyz)
-#   return sin.(2 * π * xyz[1, :]) .* sin.(2 * π * xyz[2, :]) .* sin.(2 * π * xyz[3, :])
-# end
 vmult_calls = 0;
 
-function vmult(Aloc, x, dof_map, bc)
+function vmult_crs(Aloc, x, dof_map, bc)
   global vmult_calls
   vmult_calls += 1
 
@@ -86,6 +96,8 @@ function vmult(Aloc, x, dof_map, bc)
   for i in axes(dof_map, 2)
     for j in axes(dof_map, 1)
       @inbounds jj = dof_map[j, i]
+      # TODO: would it be faster to use temporary objects and do the 
+      #       vmult on contiguous memory?
       @inbounds @simd for k = Aloc.row_ptr[j] + 1 : Aloc.row_ptr[j+1]
         @inbounds y[jj] += Aloc.val[k] * x[dof_map[Aloc.col_ind[k], i]]
       end
@@ -97,8 +109,33 @@ function vmult(Aloc, x, dof_map, bc)
   return y
 end
 
+function vmult(Aloc, x, dof_map, bc)
+  global vmult_calls
+  vmult_calls += 1
+
+  y = zeros(Float64, size(x))
+  for i in axes(dof_map, 2)
+    @inbounds y[dof_map[:, i]] += Aloc * x[dof_map[:, i]]
+  end
+  for i in eachindex(bc)
+    @inbounds y[bc[i]] = x[bc[i]]
+  end
+  return y
+end
+
+function get_diag(Adloc, dof_map::Matrix{Int64}, bc_index)
+  Ad = zeros(Float64, dof_map[end, end])
+  for idx in eachcol(dof_map)
+    Ad[idx] += Adloc
+  end
+  for i in eachindex(bc_index)
+    @inbounds Ad[bc_index[i]] = 1.0
+  end
+  return Ad
+end
+
 degs = [1]
-nels = 2 .^ [4:6;]
+nels = 2 .^ [3]
 err_table = zeros(Float64, length(nels), length(degs), 4)
 elapsed_times = zeros(Float64, 3, 0)
 
@@ -120,7 +157,7 @@ for i in eachindex(nels)
     println("Building FE space")
     fespace = FESpace(deg)
     println("Building mesh")
-    mesh = CartesianMesh([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0], nel*[1, 1, 1])
+    mesh = CartesianMesh([0.0, 0.0, 0.0], [1.0, 1.0, 1.0], nel*[1, 1, 1])
     println("Distributing dof")
     dof_map, dof_support = distribute_dof_v2(mesh, deg)
     
@@ -144,32 +181,7 @@ for i in eachindex(nels)
     x0[bc] = u_ex[bc]
 
     #Aloc = sparse(Aloc) # WARNING: it is CSC, with is suboptimal for vmult
-    Aloc = CSR(Aloc)
-
-    function vmult_debug(x::Vector{Float64}, dof_map::Matrix{Int64}, bc::Vector{Int64})
-      println(maximum(dof_map), " ", length(x))
-      y = zeros(Float64, size(x))
-      for i in axes(dof_map, 2)
-        for j in axes(dof_map, 1)
-          jj = dof_map[j, i]
-          for k = Aloc.row_ptr[j] + 1 : Aloc.row_ptr[j+1]
-            y[jj] += Aloc.val[k] * x[dof_map[Aloc.col_ind[k], i]]
-          end
-        end 
-      end
-      for i in eachindex(bc)
-        y[bc[i]] = x[bc[i]]
-      end
-      return y
-    end
-
-    function get_diag(dof_map::Matrix{Int64})
-      Ad = zeros(Float64, dof_map[end, end])
-      for idx in eachcol(dof_map)
-        Ad[idx] += Adloc
-      end
-      return Ad
-    end
+    #Aloc = CSR(Aloc)
 
     global vmult_calls
 
@@ -182,7 +194,7 @@ for i in eachindex(nels)
     println("Solving system with MG")
     vmult_calls = 0
     mglvl = MGLevel(deg, mesh, sol)
-    t = @elapsed it, u = solve_mg(mglvl, (x,d,b)->vmult(Aloc, x, d, b), get_diag, 10, 3, 3, f, x0, 1e-8)
+    t = @elapsed it, u = solve_mg(mglvl, vmult, get_diag, 10, 3, 3, f, x0, 1e-8)
     println("Total vmult calls: ", vmult_calls)
     println("Solve time: ", t)
 
@@ -211,8 +223,6 @@ for i in eachindex(nels)
     println("-------------------------------------")
   end
 end
-
-#display(err_table)
 
 conv_table = log.(err_table[2:end, :, :]./err_table[1:end-1, :, :])./log.(nels[1:end-1]./nels[2:end]) 
 display(conv_table[:, :, 2:4])

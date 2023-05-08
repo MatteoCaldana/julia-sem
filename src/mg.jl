@@ -2,6 +2,8 @@ include("mesh.jl")
 include("core.jl")
 include("matrix_free_utils.jl")
 
+using SparseArrays 
+
 struct MGLevel
   refel::FESpace
   mesh::CartesianMesh
@@ -17,6 +19,11 @@ struct MGLevel
 
   Ph::Matrix{Float64}
   Pp::Matrix{Float64}
+  P::SparseMatrixCSC{Float64, Int64}
+
+  A::Matrix{Float64}
+  Ad::Vector{Float64}
+  M::Vector{Float64}
 
   ndofs::Int64
   ndofs_fine::Int64
@@ -36,8 +43,37 @@ struct MGLevel
     boundary_idxs = find_bc(mesh, dof_support)
     boundary_values = bc_fun(dof_support[:, boundary_idxs])
 
+    Ph = reduce(kron, Iterators.repeated(fe.Ph, mesh.dim))
+    Pp = reduce(kron, Iterators.repeated(fe.Pp, mesh.dim))
+
+    A = Float64.(stiff_3d_sp(fe.w_128, fe.D_128, mesh.jd[1], mesh.jd[2], mesh.jd[3]))
+    M = Float64.(reshape(map(prod, Base.product(ntuple(x -> fe.w_128, mesh.dim)...)), length(fe.w)^mesh.dim))
+    M *= mesh.jd[1] * mesh.jd[2] * mesh.jd[3]
+
     ndofs = prod(mesh.ns .* deg .+ 1)
     ndofs_fine = prod(2 .* mesh.ns .* deg .+ 1)
+
+    NP_c = (deg + 1)^mesh.dim
+    NP_f = (2*deg + 1)^mesh.dim
+    ne = prod(mesh.ns)
+    NPNP = NP_c * NP_f;
+
+    I = zeros(Int64, ne * NPNP);
+    J = zeros(Int64, ne * NPNP);
+    val = zeros(Float64, ne * NPNP);
+
+    for ie=1:ne
+      idx_c = dof_map[:, ie]
+      idx_f = dof_map_to_fine[:, ie]
+
+      ind1 = repeat(idx_f,NP_c,1);
+      ind2 = reshape(repeat(idx_c',NP_f,1),NPNP,1);
+      st = (ie-1)*NPNP+1;
+      en = ie*NPNP;
+      I[st:en] = ind1;
+      J[st:en] = ind2;
+      val[st:en] = Ph[:];
+    end
 
     return new(
       fe, 
@@ -45,27 +81,30 @@ struct MGLevel
       has_coarse, coarse, 
       dof_map, dof_map_to_fine, dof_support, 
       boundary_idxs, boundary_values,
-      reduce(kron, Iterators.repeated(fe.Ph, mesh.dim)),
-      reduce(kron, Iterators.repeated(fe.Pp, mesh.dim)),
+      Ph, Pp,
+      sparse(I,J,val,ndofs_fine,ndofs, (x,y)->max(x, y)),
+      A, diag(A), M,
       ndofs, ndofs_fine
     )
   end
 end
 
 # from this level to the finer one
-# TODO: check this matches homg
 function interpolation_vmult(lvl::MGLevel, x::Vector{Float64})::Vector{Float64}
-  y = zeros(Float64, lvl.ndofs_fine)
+  y = Vector{Float64}(undef, lvl.ndofs_fine)
   for ie in axes(lvl.dof_map_to_fine, 2)
-    y[lvl.dof_map_to_fine[:, ie]] += lvl.Ph * x[lvl.dof_map[:, ie]] 
+    y[lvl.dof_map_to_fine[:, ie]] = lvl.Ph * x[lvl.dof_map[:, ie]] 
   end
   return y
 end
 
 function projection_vmult(lvl::MGLevel, x::Vector{Float64})::Vector{Float64}
-  y = zeros(Float64, lvl.ndofs)
+  y = zeros(lvl.ndofs)
   for ie in axes(lvl.dof_map, 2)
-    y[lvl.dof_map[:, ie]] += transpose(lvl.Ph) * x[lvl.dof_map_to_fine[:, ie]] 
+    # TODO: is this worth it? 
+    #       would it be better to materialize the projection/interpolation
+    #       considering this extra cost and the fact this is a dirty trick?
+    y[lvl.dof_map[:, ie]] += Float64.(y[lvl.dof_map[:, ie]] .== 0) .* (transpose(lvl.Ph) * x[lvl.dof_map_to_fine[:, ie]]) 
   end
   return y
 end
